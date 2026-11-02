@@ -228,11 +228,10 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          NUMBER: ${{ steps.open.outputs.pull-request-number }}
         run: |
-          if [ -n "$NUMBER" ]; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" -f state=closed > /dev/null
-          fi
+          for number in $(gh api -X GET "repos/$GITHUB_REPOSITORY/pulls" -f state=open -f head="${GITHUB_REPOSITORY_OWNER}:$PR_BRANCH" --jq '.[].number'); do
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" -f state=closed > /dev/null
+          done
           for ref in "$PR_BRANCH" "$RESET_BRANCH" "$BRANCH"; do
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$ref" > /dev/null || true
           done
@@ -256,8 +255,9 @@ jobs:
           client-id: ${{ vars.BOT_CLIENT_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: actions
-          permission-contents: write
-                # Generated files for another repository, without a checkout of it.
+          permission-contents:
+            write
+            # Generated files for another repository, without a checkout of it.
       - name: Generate files
         run: |
           set -euo pipefail
