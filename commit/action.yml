@@ -1,0 +1,40 @@
+name: Commit
+description: Commits changes in the working tree onto a branch through the GitHub API, which signs the commit.
+inputs:
+  token:
+    description: "A token with `contents: write` on the repository."
+    required: true
+  branch:
+    description: The branch to commit to.
+    required: true
+  message:
+    description: The commit message. The first line is the headline.
+    required: true
+  paths:
+    description: Newline-separated pathspecs, relative to the repository root, whose changes are committed.
+    required: true
+  base:
+    description: The branch to create `branch` from if it does not exist, or to reset it to.
+    required: false
+    default: ""
+  reset:
+    description: If `true`, the commit replaces whatever `branch` holds on top of `base`.
+    required: false
+    default: "false"
+outputs:
+  sha:
+    description: The commit, or empty if nothing changed.
+    value: ${{ steps.commit.outputs.sha }}
+runs:
+  using: composite
+  steps:
+    - id: commit
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        BRANCH: ${{ inputs.branch }}
+        MESSAGE: ${{ inputs.message }}
+        PATHS: ${{ inputs.paths }}
+        BASE: ${{ inputs.base }}
+        RESET: ${{ inputs.reset }}
+      run: bash "$GITHUB_ACTION_PATH/commit.sh"

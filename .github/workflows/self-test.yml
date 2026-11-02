@@ -1,0 +1,186 @@
+name: Self-test
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  self-test:
+    # A fork's pull request gets a read-only token.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: self-test/commit-${{ github.run_id }}-${{ github.run_attempt }}
+      PR_BRANCH: self-test/pull-request-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Add files
+        run: |
+          set -euo pipefail
+          mkdir self-test
+          echo one > self-test/modified.txt
+          head -c 3000 /dev/urandom > self-test/binary.bin
+          echo gone > self-test/deleted.txt
+      - id: add
+        uses: ./commit
+        with:
+          token: ${{ github.token }}
+          branch: ${{ env.BRANCH }}
+          base: ${{ github.event.repository.default_branch }}
+          message: |
+            test: add files
+
+            With a body.
+          paths: self-test
+      - name: Check the added files
+        env:
+          SHA: ${{ steps.add.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SHA"
+          git fetch -q --depth=1 origin "$SHA"
+          for f in modified.txt binary.bin deleted.txt; do
+            cmp <(git show "$SHA:self-test/$f") "self-test/$f"
+          done
+          test "$(git log -1 --format=%B "$SHA")" = "$(printf 'test: add files\n\nWith a body.')"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --jq .commit.verification.verified)" = true
+
+          # Work on top of the commit, like a job that checked out the branch, while
+          # keeping the actions under test in the working tree.
+          git reset -q --soft "$SHA"
+          echo two > self-test/modified.txt
+          rm self-test/deleted.txt
+          head -c 6000 /dev/urandom > self-test/large.bin
+          echo new > self-test/new.txt
+      - id: change
+        uses: ./commit
+        env:
+          COMMIT_MAX_PAYLOAD_BYTES: "4096"
+        with:
+          token: ${{ github.token }}
+          branch: ${{ env.BRANCH }}
+          message: "test: modify, delete and add"
+          paths: self-test
+      - name: Check the changes
+        env:
+          BEFORE: ${{ steps.add.outputs.sha }}
+          SHA: ${{ steps.change.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SHA"
+          git fetch -q origin "$SHA"
+          test "$(git show "$SHA:self-test/modified.txt")" = two
+          cmp <(git show "$SHA:self-test/large.bin") self-test/large.bin
+          cmp <(git show "$SHA:self-test/binary.bin") self-test/binary.bin
+          test "$(git show "$SHA:self-test/new.txt")" = new
+          if git cat-file -e "$SHA:self-test/deleted.txt" 2>/dev/null; then
+            exit 1
+          fi
+
+          commits=$(git rev-list "$BEFORE..$SHA")
+          test "$(echo "$commits" | wc -l)" -gt 1
+          for c in $commits; do
+            test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$c" --jq .commit.verification.verified)" = true
+          done
+      - id: unchanged
+        uses: ./commit
+        with:
+          token: ${{ github.token }}
+          branch: ${{ env.BRANCH }}
+          message: "test: nothing"
+          paths: self-test
+      - name: Check that nothing was committed
+        env:
+          SHA: ${{ steps.unchanged.outputs.sha }}
+        run: test -z "$SHA"
+
+      - name: Change files for the pull request
+        run: echo proposal > self-test/proposal.txt
+      - id: open
+        uses: ./create-pull-request
+        with:
+          token: ${{ github.token }}
+          branch: ${{ env.PR_BRANCH }}
+          base: ${{ env.BRANCH }}
+          title: "test: open"
+          body: Opened by the self-test.
+          paths: self-test
+      - name: Check the pull request
+        env:
+          CHANGED: ${{ steps.open.outputs.changed }}
+          SHA: ${{ steps.open.outputs.sha }}
+          NUMBER: ${{ steps.open.outputs.pull-request-number }}
+        run: |
+          set -euo pipefail
+          test "$CHANGED" = true
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" --jq '"\(.head.sha) \(.commits) \(.title)"')" = "$SHA 1 test: open"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --jq .commit.verification.verified)" = true
+
+          echo revised > self-test/proposal.txt
+      - id: update
+        uses: ./create-pull-request
+        with:
+          token: ${{ github.token }}
+          branch: ${{ env.PR_BRANCH }}
+          base: ${{ env.BRANCH }}
+          title: "test: update"
+          paths: self-test
+      - name: Check the updated pull request
+        env:
+          CHANGED: ${{ steps.update.outputs.changed }}
+          SHA: ${{ steps.update.outputs.sha }}
+          NUMBER: ${{ steps.open.outputs.pull-request-number }}
+          UPDATED: ${{ steps.update.outputs.pull-request-number }}
+        run: |
+          set -euo pipefail
+          test "$CHANGED" = true
+          test "$UPDATED" = "$NUMBER"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" --jq '"\(.state) \(.head.sha) \(.commits) \(.title)"')" = "open $SHA 1 test: update"
+          git fetch -q origin "$SHA"
+          test "$(git show "$SHA:self-test/proposal.txt")" = revised
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --jq .commit.verification.verified)" = true
+      - id: noop
+        uses: ./create-pull-request
+        with:
+          token: ${{ github.token }}
+          branch: ${{ env.PR_BRANCH }}
+          base: ${{ env.BRANCH }}
+          title: "test: no-op"
+          paths: self-test
+      - name: Check that nothing changed
+        env:
+          CHANGED: ${{ steps.noop.outputs.changed }}
+          NUMBER: ${{ steps.open.outputs.pull-request-number }}
+          SAME: ${{ steps.noop.outputs.pull-request-number }}
+        run: |
+          set -euo pipefail
+          test "$CHANGED" = false
+          test "$SAME" = "$NUMBER"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" --jq .title)" = "test: update"
+
+      - name: Clean up
+        if: always()
+        env:
+          NUMBER: ${{ steps.open.outputs.pull-request-number }}
+        run: |
+          if [ -n "$NUMBER" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" -f state=closed > /dev/null
+          fi
+          for ref in "$PR_BRANCH" "$BRANCH"; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$ref" > /dev/null || true
+          done

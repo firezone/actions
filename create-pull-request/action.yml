@@ -1,0 +1,64 @@
+name: Create pull request
+description: Commits changes in the working tree onto a branch reset to the base, and opens or updates its pull request.
+inputs:
+  token:
+    description: "A token with `contents: write` and `pull-requests: write` on the repository."
+    required: true
+  branch:
+    description: The pull request's branch. It is reset to `base` on every run.
+    required: true
+  base:
+    description: The branch the pull request merges into. Defaults to the repository's default branch.
+    required: false
+    default: ""
+  title:
+    description: The pull request title.
+    required: true
+  body:
+    description: The pull request body.
+    required: false
+    default: ""
+  paths:
+    description: Newline-separated pathspecs, relative to the repository root, whose changes are committed.
+    required: true
+  commit-message:
+    description: The commit message. Defaults to the title.
+    required: false
+    default: ""
+  reviewers:
+    description: Comma- or newline-separated users or `org/team` slugs to request reviews from when the pull request is opened.
+    required: false
+    default: ""
+  labels:
+    description: Comma- or newline-separated labels to add when the pull request is opened.
+    required: false
+    default: ""
+outputs:
+  changed:
+    description: "`true` if a commit was made or a pull request opened."
+    value: ${{ steps.create.outputs.changed }}
+  sha:
+    description: The commit, or empty if nothing changed.
+    value: ${{ steps.create.outputs.sha }}
+  pull-request-number:
+    description: The open pull request's number, if there is one.
+    value: ${{ steps.create.outputs.pull-request-number }}
+  pull-request-url:
+    description: The open pull request's URL, if there is one.
+    value: ${{ steps.create.outputs.pull-request-url }}
+runs:
+  using: composite
+  steps:
+    - id: create
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        BRANCH: ${{ inputs.branch }}
+        BASE: ${{ inputs.base }}
+        TITLE: ${{ inputs.title }}
+        BODY: ${{ inputs.body }}
+        PATHS: ${{ inputs.paths }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        REVIEWERS: ${{ inputs.reviewers }}
+        LABELS: ${{ inputs.labels }}
+      run: bash "$GITHUB_ACTION_PATH/create-pull-request.sh"
