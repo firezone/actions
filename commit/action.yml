@@ -7,6 +7,10 @@ inputs:
   branch:
     description: The branch to commit to.
     required: true
+  repository:
+    description: The repository to commit to, as `owner/name`. Defaults to the current repository.
+    required: false
+    default: ${{ github.repository }}
   message:
     description: The commit message. The first line is the headline.
     required: true
@@ -33,6 +37,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
         BRANCH: ${{ inputs.branch }}
+        REPOSITORY: ${{ inputs.repository }}
         MESSAGE: ${{ inputs.message }}
         PATHS: ${{ inputs.paths }}
         BASE: ${{ inputs.base }}

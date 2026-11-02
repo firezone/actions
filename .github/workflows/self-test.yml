@@ -246,3 +246,57 @@ jobs:
           for ref in "$PR_BRANCH" "$RESET_BRANCH" "$BRANCH"; do
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$ref" > /dev/null || true
           done
+
+  without-commits:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: self-test/without-commits-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: under-test
+          persist-credentials: false
+      # Generated files for another repository, without a checkout of it.
+      - name: Generate files
+        run: |
+          set -euo pipefail
+          git init -q .
+          mkdir generated
+          echo generated > generated/file.txt
+      - id: commit
+        uses: ./under-test/commit
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          branch: ${{ env.BRANCH }}
+          base: ${{ github.event.repository.default_branch }}
+          message: "test: commit without a checkout"
+          paths: generated
+      - name: Check the commit
+        env:
+          BASE: ${{ github.event.repository.default_branch }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE...$SHA" --jq '"\(.behind_by) \(.ahead_by) \([.files[].filename] | join(" "))"')" = "0 1 generated/file.txt"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --jq .commit.verification.verified)" = true
+      - id: again
+        uses: ./under-test/commit
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          branch: ${{ env.BRANCH }}
+          message: "test: nothing"
+          paths: generated
+      - name: Check that nothing was committed
+        env:
+          SHA: ${{ steps.again.outputs.sha }}
+        run: test -z "$SHA"
+      - name: Clean up
+        if: always()
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" > /dev/null || true

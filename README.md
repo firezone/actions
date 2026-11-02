@@ -16,17 +16,19 @@ uses: firezone/actions/create-pull-request@<sha> # main
 Commits the changes under `paths` onto `branch`, on top of its current head.
 
 The changes are the difference between the checked-out commit and the working tree, including untracked and deleted files.
+In a repository without commits, such as one made with `git init` to hold generated files for another repository, every file under `paths` is a change.
 They are applied file by file onto the branch's head, so the branch may have moved since the checkout; a file the branch changed in the meantime fails the action, unless the branch already holds the wanted content.
 If the branch moves while committing, the action re-reads it and tries again.
 
-| Input     | Required | Description                                                                                  |
-| --------- | -------- | -------------------------------------------------------------------------------------------- |
-| `token`   | yes      | A token with `contents: write`.                                                              |
-| `branch`  | yes      | The branch to commit to.                                                                     |
-| `message` | yes      | The commit message. The first line is the headline.                                          |
-| `paths`   | yes      | Newline-separated pathspecs, relative to the repository root, such as `docs` or `src/*.png`. |
-| `base`    | no       | The branch to create `branch` from if it does not exist, or to reset it to.                  |
-| `reset`   | no       | If `true`, the commit replaces whatever `branch` holds on top of `base`.                     |
+| Input        | Required | Description                                                                                  |
+| ------------ | -------- | -------------------------------------------------------------------------------------------- |
+| `token`      | yes      | A token with `contents: write`.                                                              |
+| `branch`     | yes      | The branch to commit to.                                                                     |
+| `repository` | no       | The repository to commit to, as `owner/name`. Defaults to the current repository.            |
+| `message`    | yes      | The commit message. The first line is the headline.                                          |
+| `paths`      | yes      | Newline-separated pathspecs, relative to the repository root, such as `docs` or `src/*.png`. |
+| `base`       | no       | The branch to create `branch` from if it does not exist, or to reset it to.                  |
+| `reset`      | no       | If `true`, the commit replaces whatever `branch` holds on top of `base`.                     |
 
 | Output | Description                              |
 | ------ | ---------------------------------------- |
