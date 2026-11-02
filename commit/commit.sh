@@ -228,8 +228,18 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
     fi
 
     if [ "$RESET" = true ] && [ -n "$current" ] && [ "$current" != "$start" ]; then
+        # The branch is up to date if it changes what the new commit would change,
+        # in the same way, even if the base moved on elsewhere in the meantime.
         ensure_local "$current"
-        if [ "$(git rev-parse "$current^{tree}")" = "$planned" ]; then
+        merge_base=$(gh api "repos/$repo/compare/$start...$current" --jq .merge_base_commit.sha)
+        ensure_local "$merge_base"
+        {
+            git diff-tree -r -z --no-renames --name-only "$merge_base" "$current"
+            git diff-tree -r -z --no-renames --name-only "$start" "$planned"
+        } | sort -zu >"$work/proposed"
+        git diff-tree -r -z --no-renames --name-only "$current" "$planned" | sort -z >"$work/stale"
+        comm -z -12 "$work/proposed" "$work/stale" >"$work/outdated"
+        if [ ! -s "$work/outdated" ]; then
             echo "$BRANCH is up to date."
             emit "" true
             exit 0
