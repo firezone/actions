@@ -23,6 +23,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       BRANCH: self-test/commit-${{ github.run_id }}-${{ github.run_attempt }}
+      RESET_BRANCH: self-test/reset-${{ github.run_id }}-${{ github.run_attempt }}
       PR_BRANCH: self-test/pull-request-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,9 +110,65 @@ jobs:
           SHA: ${{ steps.unchanged.outputs.sha }}
         run: test -z "$SHA"
 
+      - name: Change files for the reset
+        run: echo first > self-test/proposal.txt
+      - id: reset-new
+        uses: ./commit
+        with:
+          token: ${{ github.token }}
+          branch: ${{ env.RESET_BRANCH }}
+          base: ${{ env.BRANCH }}
+          reset: true
+          message: "test: reset a new branch"
+          paths: self-test
+      - name: Change the files again
+        env:
+          SHA: ${{ steps.reset-new.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SHA"
+          echo second > self-test/proposal.txt
+      - id: reset
+        uses: ./commit
+        with:
+          token: ${{ github.token }}
+          branch: ${{ env.RESET_BRANCH }}
+          base: ${{ env.BRANCH }}
+          reset: true
+          message: "test: reset"
+          paths: self-test
+      - name: Check the reset
+        env:
+          SHA: ${{ steps.reset.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/compare/$BRANCH...$SHA" --jq '"\(.behind_by) \(.ahead_by)"')" = "0 1"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$RESET_BRANCH" --jq .object.sha)" = "$SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --jq .commit.verification.verified)" = true
+          git fetch -q origin "$SHA"
+          test "$(git show "$SHA:self-test/proposal.txt")" = second
+          # The temporary branch the reset commits on is gone.
+          test "$(gh api "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq "[.[].name | select(startswith(\"$RESET_BRANCH-\"))] | length")" = 0
+
+      # Opening a pull request with GITHUB_TOKEN needs the repository setting "Allow
+      # GitHub Actions to create and approve pull requests".
+      - name: Check whether GITHUB_TOKEN may open pull requests
+        id: probe
+        run: |
+          if gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" -f head="$BRANCH" -f base="$BRANCH" -f title=probe 2>&1 |
+            grep -q "not permitted to create or approve pull requests"; then
+            echo "::warning::GitHub Actions may not open pull requests in this repository; skipping the create-pull-request tests."
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Change files for the pull request
+        if: steps.probe.outputs.allowed == 'true'
         run: echo proposal > self-test/proposal.txt
       - id: open
+        if: steps.probe.outputs.allowed == 'true'
         uses: ./create-pull-request
         with:
           token: ${{ github.token }}
@@ -121,6 +178,7 @@ jobs:
           body: Opened by the self-test.
           paths: self-test
       - name: Check the pull request
+        if: steps.probe.outputs.allowed == 'true'
         env:
           CHANGED: ${{ steps.open.outputs.changed }}
           SHA: ${{ steps.open.outputs.sha }}
@@ -133,6 +191,7 @@ jobs:
 
           echo revised > self-test/proposal.txt
       - id: update
+        if: steps.probe.outputs.allowed == 'true'
         uses: ./create-pull-request
         with:
           token: ${{ github.token }}
@@ -141,6 +200,7 @@ jobs:
           title: "test: update"
           paths: self-test
       - name: Check the updated pull request
+        if: steps.probe.outputs.allowed == 'true'
         env:
           CHANGED: ${{ steps.update.outputs.changed }}
           SHA: ${{ steps.update.outputs.sha }}
@@ -155,6 +215,7 @@ jobs:
           test "$(git show "$SHA:self-test/proposal.txt")" = revised
           test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --jq .commit.verification.verified)" = true
       - id: noop
+        if: steps.probe.outputs.allowed == 'true'
         uses: ./create-pull-request
         with:
           token: ${{ github.token }}
@@ -163,6 +224,7 @@ jobs:
           title: "test: no-op"
           paths: self-test
       - name: Check that nothing changed
+        if: steps.probe.outputs.allowed == 'true'
         env:
           CHANGED: ${{ steps.noop.outputs.changed }}
           NUMBER: ${{ steps.open.outputs.pull-request-number }}
@@ -181,6 +243,6 @@ jobs:
           if [ -n "$NUMBER" ]; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" -f state=closed > /dev/null
           fi
-          for ref in "$PR_BRANCH" "$BRANCH"; do
+          for ref in "$PR_BRANCH" "$RESET_BRANCH" "$BRANCH"; do
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$ref" > /dev/null || true
           done
