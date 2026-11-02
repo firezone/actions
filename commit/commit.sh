@@ -3,12 +3,13 @@
 # Commits what the job changed under `PATHS` onto `BRANCH` with the GraphQL
 # `createCommitOnBranch` mutation, so that GitHub signs the commit.
 #
-# The job's changes are the difference between the checked-out commit (or
-# nothing, in a repository without commits) and the working tree. They are
-# applied file by file on top of the branch's current head, like a rebase: a
-# file the branch changed since the checkout is a conflict, unless the branch
-# already holds the content the job wants. Only the changed paths are looked up
-# on GitHub, so the target repository never has to be fetched.
+# The job's changes are the difference between the checked-out commit and the
+# working tree. They are applied file by file on top of the branch's current
+# head, like a rebase: a file the branch changed since the checkout is a
+# conflict, unless the branch already holds the content the job wants. In a
+# repository without commits, every file under PATHS is a change, and replaces
+# whatever the branch holds. Only the changed paths are looked up on GitHub, so
+# the target repository never has to be fetched.
 set -euo pipefail
 export LC_ALL=C
 
@@ -23,6 +24,7 @@ MAX_BYTES=${COMMIT_MAX_PAYLOAD_BYTES:-10485760}
 MAX_ATTEMPTS=5
 
 repo=${REPOSITORY:-$GITHUB_REPOSITORY}
+overwrite=false
 zero=0000000000000000000000000000000000000000
 
 cd "$(git rev-parse --show-toplevel)"
@@ -98,6 +100,7 @@ if head=$(git rev-parse -q --verify 'HEAD^{commit}'); then
 else
     head=$(git hash-object -t tree /dev/null)
     GIT_INDEX_FILE="$work/index" git read-tree --empty
+    overwrite=true
 fi
 while IFS= read -r spec; do
     spec=${spec#"${spec%%[![:space:]]*}"}
@@ -151,7 +154,7 @@ plan() {
         if [ "${remote[i]}" = "${after[i]}" ]; then
             continue
         fi
-        if [ "${remote[i]}" != "${before[i]}" ]; then
+        if [ "${remote[i]}" != "${before[i]}" ] && [ "$overwrite" = false ]; then
             conflicts+=("${paths[i]}")
             continue
         fi

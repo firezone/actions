@@ -293,7 +293,25 @@ jobs:
       - name: Check that nothing was committed
         env:
           SHA: ${{ steps.again.outputs.sha }}
-        run: test -z "$SHA"
+        run: |
+          set -euo pipefail
+          test -z "$SHA"
+          echo regenerated > generated/file.txt
+      - id: overwrite
+        uses: ./under-test/commit
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repository: ${{ github.repository }}
+          branch: ${{ env.BRANCH }}
+          message: "test: overwrite"
+          paths: generated
+      - name: Check the overwrite
+        env:
+          SHA: ${{ steps.overwrite.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/contents/generated/file.txt?ref=$SHA" --jq .content | base64 -d)" = regenerated
       - name: Clean up
         if: always()
         env:

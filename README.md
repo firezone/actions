@@ -16,7 +16,7 @@ uses: firezone/actions/create-pull-request@<sha> # main
 Commits the changes under `paths` onto `branch`, on top of its current head.
 
 The changes are the difference between the checked-out commit and the working tree, including untracked and deleted files.
-In a repository without commits, such as one made with `git init` to hold generated files for another repository, every file under `paths` is a change.
+In a repository without commits, such as one made with `git init` to hold generated files for another repository, every file under `paths` is a change, and replaces whatever the branch holds at that path.
 They are applied file by file onto the branch's head, so the branch may have moved since the checkout; a file the branch changed in the meantime fails the action, unless the branch already holds the wanted content.
 If the branch moves while committing, the action re-reads it and tries again.
 
