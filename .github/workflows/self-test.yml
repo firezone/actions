@@ -14,12 +14,13 @@ concurrency:
 
 jobs:
   self-test:
-    # A fork's pull request gets a read-only token.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # A fork's pull request gets no secrets, and the pull requests the test opens
+    # must not start it again.
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && !startsWith(github.head_ref, 'self-test/')
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
       BRANCH: self-test/commit-${{ github.run_id }}-${{ github.run_attempt }}
@@ -29,6 +30,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: actions
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Add files
         run: |
@@ -40,7 +49,7 @@ jobs:
       - id: add
         uses: ./commit
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           branch: ${{ env.BRANCH }}
           base: ${{ github.event.repository.default_branch }}
           message: |
@@ -73,7 +82,7 @@ jobs:
         env:
           COMMIT_MAX_PAYLOAD_BYTES: "4096"
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           branch: ${{ env.BRANCH }}
           message: "test: modify, delete and add"
           paths: self-test
@@ -101,7 +110,7 @@ jobs:
       - id: unchanged
         uses: ./commit
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           branch: ${{ env.BRANCH }}
           message: "test: nothing"
           paths: self-test
@@ -115,7 +124,7 @@ jobs:
       - id: reset-new
         uses: ./commit
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           branch: ${{ env.RESET_BRANCH }}
           base: ${{ env.BRANCH }}
           reset: true
@@ -131,7 +140,7 @@ jobs:
       - id: reset
         uses: ./commit
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           branch: ${{ env.RESET_BRANCH }}
           base: ${{ env.BRANCH }}
           reset: true
@@ -151,34 +160,18 @@ jobs:
           # The temporary branch the reset commits on is gone.
           test "$(gh api "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq "[.[].name | select(startswith(\"$RESET_BRANCH-\"))] | length")" = 0
 
-      # Opening a pull request with GITHUB_TOKEN needs the repository setting "Allow
-      # GitHub Actions to create and approve pull requests".
-      - name: Check whether GITHUB_TOKEN may open pull requests
-        id: probe
-        run: |
-          if gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" -f head="$BRANCH" -f base="$BRANCH" -f title=probe 2>&1 |
-            grep -q "not permitted to create or approve pull requests"; then
-            echo "::warning::GitHub Actions may not open pull requests in this repository; skipping the create-pull-request tests."
-            echo "allowed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "allowed=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Change files for the pull request
-        if: steps.probe.outputs.allowed == 'true'
         run: echo proposal > self-test/proposal.txt
       - id: open
-        if: steps.probe.outputs.allowed == 'true'
         uses: ./create-pull-request
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           branch: ${{ env.PR_BRANCH }}
           base: ${{ env.BRANCH }}
           title: "test: open"
           body: Opened by the self-test.
           paths: self-test
       - name: Check the pull request
-        if: steps.probe.outputs.allowed == 'true'
         env:
           CHANGED: ${{ steps.open.outputs.changed }}
           SHA: ${{ steps.open.outputs.sha }}
@@ -191,16 +184,14 @@ jobs:
 
           echo revised > self-test/proposal.txt
       - id: update
-        if: steps.probe.outputs.allowed == 'true'
         uses: ./create-pull-request
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           branch: ${{ env.PR_BRANCH }}
           base: ${{ env.BRANCH }}
           title: "test: update"
           paths: self-test
       - name: Check the updated pull request
-        if: steps.probe.outputs.allowed == 'true'
         env:
           CHANGED: ${{ steps.update.outputs.changed }}
           SHA: ${{ steps.update.outputs.sha }}
@@ -215,16 +206,14 @@ jobs:
           test "$(git show "$SHA:self-test/proposal.txt")" = revised
           test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --jq .commit.verification.verified)" = true
       - id: noop
-        if: steps.probe.outputs.allowed == 'true'
         uses: ./create-pull-request
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           branch: ${{ env.PR_BRANCH }}
           base: ${{ env.BRANCH }}
           title: "test: no-op"
           paths: self-test
       - name: Check that nothing changed
-        if: steps.probe.outputs.allowed == 'true'
         env:
           CHANGED: ${{ steps.noop.outputs.changed }}
           NUMBER: ${{ steps.open.outputs.pull-request-number }}
@@ -238,6 +227,7 @@ jobs:
       - name: Clean up
         if: always()
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           NUMBER: ${{ steps.open.outputs.pull-request-number }}
         run: |
           if [ -n "$NUMBER" ]; then
@@ -248,10 +238,10 @@ jobs:
           done
 
   without-commits:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && !startsWith(github.head_ref, 'self-test/')
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
       BRANCH: self-test/without-commits-${{ github.run_id }}-${{ github.run_attempt }}
@@ -260,7 +250,14 @@ jobs:
         with:
           path: under-test
           persist-credentials: false
-      # Generated files for another repository, without a checkout of it.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: actions
+          permission-contents: write
+                # Generated files for another repository, without a checkout of it.
       - name: Generate files
         run: |
           set -euo pipefail
@@ -270,7 +267,7 @@ jobs:
       - id: commit
         uses: ./under-test/commit
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           repository: ${{ github.repository }}
           branch: ${{ env.BRANCH }}
           base: ${{ github.event.repository.default_branch }}
@@ -288,7 +285,7 @@ jobs:
       - id: again
         uses: ./under-test/commit
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           repository: ${{ github.repository }}
           branch: ${{ env.BRANCH }}
           message: "test: nothing"
@@ -299,4 +296,6 @@ jobs:
         run: test -z "$SHA"
       - name: Clean up
         if: always()
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" > /dev/null || true
